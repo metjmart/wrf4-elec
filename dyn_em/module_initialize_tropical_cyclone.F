@@ -101,6 +101,11 @@ CONTAINS
     real :: r0,zdd,dd1,dd2,xref,vr,fcor,qvs,e1,tx,px,qx,ric,rjc,rr,diff,sst
     real*8 :: rmax,vmax,frac,angle
     real, dimension(:), allocatable :: rref,zref,th0,qv0,thv0,prs0,pi0,rh0
+    ! JM: add variables/arrays for initial vortex
+    integer :: tc_type, z_type
+    real :: vdc, zmax, L_z1, L_z2
+    real :: rdc, bigR
+    real, dimension(:), allocatable :: vt
     real, dimension(:,:), allocatable :: vref,piref,pref,thref,thvref,qvref
     real :: pi_in,dz
 
@@ -111,12 +116,19 @@ CONTAINS
    real :: thtmp, ptmp, temp(3)
 
    LOGICAL :: moisture_init
-   LOGICAL :: stretch_grid, dry_sounding
+   LOGICAL :: dry_sounding
    character (len=256) :: mminlu2
+   
+! JM: vertical grid parameters from the namelist
+! Move stretch_grid to integer to permit more options 
+
+  INTEGER :: stretch_grid, auto_levels_opt
+  REAL :: max_dz, dzbot, dzstretch_s, dzstretch_u
    
 #ifdef DM_PARALLEL
 #    include "data_calls.inc"
 #endif
+
 
 
    SELECT CASE ( model_data_order )
@@ -162,25 +174,60 @@ CONTAINS
 !-----------------------------------------------------------------------
 !               USER SETTINGS
 
-!  Parameters for analytic vortex:
-!  Reference:  Rotunno and Emanuel, 1987, JAS, p. 549
-
-    r0     =   412500.0     ! outer radius (m)
-    rmax   =    82500.0     ! approximate radius of max winds (m)
-    vmax   =       15.0     ! approximate value of max wind speed (m/s)
-    zdd    =    20000.0     ! depth of vortex (m)
-
-
-! other settings:
-
     fcor   =  5.0e-5        ! Coriolis parameter (1/s)
     sst    =  28.0          ! sea-surface temperature (Celsius)
 
+! JM: stretch_grid - vertical grid stretching option
+! 1 = exponential eta 
+! 2 = stretching eta via auto_levels_opt = 2
+
+   stretch_grid = 2
+
+!-----------------------------------------------------------------------
+! JM: Analytic vortex configuration
+
+! tc_type = Radial structure of the analytic vortex
+  ! 1 = Rotunno and Emanuel (1987) - rmax, r0, vmax, fcor
+  ! 2 = Modified Rankine vortex - rmax, rdc, bigR, vmax
+
+! z_type = Vertical structure of the analytic vortex 
+  ! 1 = Linear decay 
+  ! 2 = Vertical decay function from Nolan (2007, Aust. Meteor. Mag., Eq. 4)
+
 !-----------------------------------------------------------------------
 
-   stretch_grid = .true.
+    tc_type = 2
+    z_type = 2
+
+! tc_type - required parameters
+    rmax = 135000.0  ! approximate radius of maximum winds (m)
+    vmax = 15.0      ! maximum axisymmetric tangential velocity (m/s)
+
+!  For tc_type = 1, unique parameters for Rotunno and Emanuel (1987) vortex
+    r0 = 412500.0    ! outer radius (m)
+    ! fcor - specified below as a general parameter for the idealized TC simulations
+
+!  For tc_type = 2, unique parameters for the modified Rankine vortex
+    rdc  = -0.30    ! radial decay rate (nondimensional) for r >= rmax
+                    !   ( where vt = vmax (r/rmax)^rdc )
+    bigR = 600000.0 ! radius (m) where axisymmetric tangential velocity is forced to go to zero
+                    ! using the exponential decay function of Nolan (2007; Eq. 3)
+                    ! Note: This is not the radius where V=0! That occurs further out
+
+! z_type - required parameters
+
+! For z_type = 1, unique parameters for linear vertical decay
+    zdd = 20000.0   ! depth of vortex (m)
+
+! For z_type = 2, unique parameters for vertical decay function from Nolan et al. (2007)
+    vdc  = 1.8      ! Vertical decay rate of axisymmetric tangential winds above and below barotropic zones
+    zmax = 1500.0   ! Altitude of tangential velocity maximum
+    L_z1 = 2500.0   ! Altitude of approximate barotropic zone for tangential winds below zmax
+    L_z2 = 3500.0   ! Altitude of approximate barotropic zone for tangential winds above zmax
+
+!-----------------------------------------------------------------------
+
    delt = 6.
-!   z_scale = .50
    z_scale = .40
    pi = 2.*asin(1.0)
    write(6,*) ' pi is ',pi
@@ -312,11 +359,50 @@ CONTAINS
 
 ! set up the grid
 
-   IF (stretch_grid) THEN ! exponential stretch for eta (nearly constant dz)
+! JM: move call to get_sounding here from commented out section later on
+
+!  get the sounding from the ascii sounding file, first get dry sounding and 
+!  calculate base state
+
+  write(6,*) ' getting dry sounding for base state '
+  dry_sounding = .true.
+  CALL get_sounding( zk, p_in, pd_in, theta, rho, u, v, qv, dry_sounding, nl_max, nl_in )
+
+  write(6,*) ' returned from reading sounding, nl_in is ',nl_in
+
+!  find ptop for the desired ztop (ztop is input from the namelist),
+!  and find surface pressure
+
+  grid%p_top = interp_0( p_in, zk, config_flags%ztop, nl_in )
+
+! JM: store auto_levels_opt parameters 
+
+   max_dz            = model_config_rec%max_dz
+   dzbot             = model_config_rec%dzbot
+   dzstretch_s       = model_config_rec%dzstretch_s
+   dzstretch_u       = model_config_rec%dzstretch_u
+   auto_levels_opt   = model_config_rec%auto_levels_opt
+
+! JM: configure vertical levels
+
+   IF (stretch_grid == 1) THEN ! exponential stretch for eta (nearly constant dz)
      DO k=1, kde
       grid%znw(k) = (exp(-(k-1)/float(kde-1)/z_scale) - exp(-1./z_scale))/ &
                                 (1.-exp(-1./z_scale))
      ENDDO
+   
+   ELSE IF (stretch_grid == 2) THEN ! JM: apply stretching from auto_levels_opt = 2
+
+     write(6,*) ' using new automatic levels program'
+     write(6,*) ' ztop is ', grid%ztop
+     write(6,*) ' p_top is ', grid%p_top
+     write(6,*) ' max_dz is ', max_dz
+     write(6,*) ' dzbot is ', dzbot
+     write(6,*) ' dzstretch_s is ', dzstretch_s
+     write(6,*) ' dzstretch_u is ', dzstretch_u
+
+     CALL levels( kte-1, grid%p_top, grid%znw, max_dz, dzbot, dzstretch_s, dzstretch_u, r_d, g )
+
    ELSE
      DO k=1, kde
       grid%znw(k) = 1. - float(k-1)/float(kde-1)
@@ -349,17 +435,18 @@ CONTAINS
 
 !  get the sounding from the ascii sounding file, first get dry sounding and 
 !  calculate base state
+!  JM: commenting out here and moving it up earlier
 
-  write(6,*) ' getting dry sounding for base state '
-  dry_sounding = .true.
-  CALL get_sounding( zk, p_in, pd_in, theta, rho, u, v, qv, dry_sounding, nl_max, nl_in )
+!  write(6,*) ' getting dry sounding for base state '
+!  dry_sounding = .true.
+!  CALL get_sounding( zk, p_in, pd_in, theta, rho, u, v, qv, dry_sounding, nl_max, nl_in )
 
-  write(6,*) ' returned from reading sounding, nl_in is ',nl_in
+!  write(6,*) ' returned from reading sounding, nl_in is ',nl_in
 
 !  find ptop for the desired ztop (ztop is input from the namelist),
 !  and find surface pressure
 
-  grid%p_top = interp_0( p_in, zk, config_flags%ztop, nl_in )
+!  grid%p_top = interp_0( p_in, zk, config_flags%ztop, nl_in )
 
   !  For hybrid coord
 
@@ -578,10 +665,7 @@ CONTAINS
   ENDDO
 
 !-----------------------------------------------------------------------
-!  Analytic vortex.
-!  Reference:  Rotunno and Emanuel, 1987, JAS, p. 549
-
-    dd2 = 2.0 * rmax / ( r0 + rmax )
+!  Construct the initial vortex
 
     nref = 1 + int( float(ide-ids+1)/2.0 )
     kref = kte-1
@@ -599,6 +683,8 @@ CONTAINS
     allocate(  prs0(0:kref+1)     )
     allocate(   pi0(0:kref+1)     )
     allocate(   rh0(0:kref+1)     )
+    ! JM: allocate array for vt(r)
+    allocate(    vt(nref)         )
     allocate(  vref(nref,0:kref+1))
     allocate( piref(nref,0:kref+1))
     allocate(  pref(nref,0:kref+1))
@@ -630,6 +716,8 @@ CONTAINS
     zref(kref+1) = zref(kref)+(zref(kref)-zref(kref-1))
 
       rref=0.0
+        ! JM: add vt
+        vt=0.0
       vref=0.0
      piref=0.0
       pref=0.0
@@ -650,25 +738,63 @@ CONTAINS
       endif
     enddo
 
+    ! JM: revise implementation of the initial vortex
+    ! Radial structure
     print *,'  vref:'
-    do k=1,kref
+    IF (tc_type == 1) THEN
+      ! Rotunno and Emanuel (1987) vortex
+      dd2 = 2.0 * rmax / ( r0 + rmax )
       do i=1,nref
         if(rref(i).lt.r0)then
           dd1 = 2.0 * rmax / ( rref(i) + rmax )
-          vr = sqrt( vmax**2 * (rref(i)/rmax)**2     &
+          vt(i) = sqrt( vmax**2 * (rref(i)/rmax)**2     &
           * ( dd1 ** 3 - dd2 ** 3 ) + 0.25*fcor*fcor*rref(i)*rref(i) )   &
                   - 0.5 * fcor * rref(i)
         else 
-          vr = 0.0
-        endif
-        if(zref(k).lt.zdd)then
-          vref(i,k) = vr * (zdd-zref(k))/(zdd-0.0)
-        else
-          vref(i,k) = 0.0
-        endif
-        if(k.eq.1) print *,i,rref(i),vref(i,k)
+          vt(i) = 0.0
+        endif 
       enddo
-    enddo
+    ELSE IF (tc_type == 2) THEN
+      ! Modified Rankine vortex 
+      do i=1,nref 
+        ! First, create the modified Rankine vortex
+        if( rref(i).lt.rmax )then
+          vt(i) = vmax*rref(i)/rmax
+        else
+          vt(i) = vmax*( (rref(i)/rmax)**rdc )
+        endif
+      enddo
+      ! Apply exponential radial decay function (Nolan et al. 2007a)
+      do i=1,nref
+        vt(i) = vt(i) * exp(-(rref(i)/bigR)**6)
+      enddo 
+    ENDIF
+    ! Vertical structure
+    IF (z_type == 1) THEN
+      ! Linear decay
+      do k=1,kref
+        do i=1,nref
+          if(zref(k).lt.zdd)then
+            vref(i,k) = vt(i) * (zdd-zref(k))/(zdd-0.0)
+          else
+            vref(i,k) = 0.0
+          endif
+          if(k.eq.1) print *,i,rref(i),vref(i,k)
+        enddo
+      enddo
+    ELSE IF (z_type == 2) THEN
+      ! Nolan (2007) vertical decay function
+      do k=1,kref
+        do i=1,nref
+          if(zref(k).le.zmax)then
+            vref(i,k) = vt(i) * exp(-(abs(zref(k)-zmax)**vdc) / (vdc * L_z1**vdc))
+          else
+            vref(i,k) = vt(i) * exp(-(abs(zref(k)-zmax)**vdc) / (vdc * L_z2**vdc))
+          endif
+          if(k.eq.1) print *,i,rref(i),vref(i,k)
+        enddo
+      enddo 
+    END IF 
 
     print *,'  Iterate:'
     DO nloop=1,20
@@ -1157,6 +1283,77 @@ CONTAINS
 
    SUBROUTINE init_module_initialize
    END SUBROUTINE init_module_initialize
+
+
+! JM: add levels subroutine from module_initialize_real.F
+
+!---------------------------------------------------------------------
+   SUBROUTINE levels( nlev, ptop, eta, dzmax, dzbot, dzstretch_s, dzstretch_u, r_d, g )
+    implicit none
+    integer, intent(in) :: nlev
+    real, intent(in) :: ptop, dzmax, dzbot, dzstretch_s, dzstretch_u, r_d, g
+    real, dimension(0:nlev), intent(out) :: eta
+
+    real, dimension(nlev) :: zup, pup
+    real :: tt, a
+    real :: ztop, dz, dztest, zscale
+    integer :: isave, i
+
+    tt=290. ! isothermal temperature used for z/log p relation - tt=290 fits dzbot
+    ztop=r_d*tt/g*alog(1.e5/ptop)
+    zscale=r_d*tt/g
+    dz=dzbot
+    zup(1)=dz
+    pup(1)=1.e5*exp(-g*zup(1)/r_d/tt)
+    eta(0)=1.0
+    eta(1)=(pup(1)-ptop)/(1.e5-ptop)
+    print *,1,dz,zup(1),eta(1)
+    isave=1
+    do i=1,nlev-1
+        a=dzstretch_u+(dzstretch_s-dzstretch_u)*max((dzmax*0.5-dz)/(dzmax*0.5), 0.)
+        dz=a*dz
+        dztest=(ztop-zup(isave))/(nlev-isave)
+        if(dztest.lt.dz)exit
+        isave=i+1
+        zup(i+1)=zup(i)+dz
+        pup(i+1)=1.e5*exp(-g*zup(i+1)/r_d/tt)
+        eta(i+1)=(pup(i+1)-ptop)/(1.e5-ptop)
+        print *,i+1,dz,zup(i+1),eta(i+1),a
+         IF ( i .EQ. nlev-1 ) THEN
+            CALL wrf_debug ( 0, 'You need one of four things:' )
+            CALL wrf_debug ( 0, '1) More eta levels: e_vert' )
+            CALL wrf_debug ( 0, '2) A lower p_top: p_top_requested')
+            CALL wrf_debug ( 0, '3) Increase the lowest eta thickness: dzbot')
+            CALL wrf_debug ( 0, '4) Increase the stretching factor: dzstretch_s or dzstretch_u')
+            CALL wrf_debug ( 0, 'All are namelist options')
+            CALL wrf_error_fatal ( 'not enough eta levels to reach p_top')
+         END IF
+    enddo
+    print *,ztop,zup(isave),nlev,isave
+    dz=(ztop-zup(isave))/(nlev-isave)
+         IF ( dz .GT. 1.5*dzmax ) THEN       ! isothermal temp 1.5 times stratosphere temp
+            CALL wrf_debug ( 0, 'Warning: Upper levels may be too thick' )
+            CALL wrf_debug ( 0, 'You need one of five things:' )
+            CALL wrf_debug ( 0, '1) More eta levels: e_vert' )
+            CALL wrf_debug ( 0, '2) A lower p_top: p_top_requested')
+            CALL wrf_debug ( 0, '3) Increase the lowest eta thickness: dzbot')
+            CALL wrf_debug ( 0, '4) Increase the stretching factor: dzstretch_s or dzstretch_u')
+            CALL wrf_debug ( 0, '5) Increase the maximum allowed thickness: max_dz')
+            CALL wrf_debug ( 0, 'All are namelist options')
+            CALL wrf_error_fatal ( 'Upper levels may be too thick')
+         END IF
+    do i=isave,nlev-1
+        zup(i+1)=zup(i)+dz
+        pup(i+1)=1.e5*exp(-g*zup(i+1)/r_d/tt)
+        eta(i+1)=(pup(i+1)-ptop)/(1.e5-ptop)
+        print *,i+1,dz,zup(i+1),eta(i+1)
+    enddo
+    eta(nlev) = 0.
+    print 1000, eta
+    1000 format(10f10.4)
+    !1000 format(10g10.3)
+    return
+    END SUBROUTINE levels
 
 !---------------------------------------------------------------------
 
