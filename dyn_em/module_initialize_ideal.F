@@ -93,7 +93,9 @@ CONTAINS
    INTEGER, PARAMETER :: nl_max = 1000
    REAL, DIMENSION(nl_max) :: zk, p_in, theta, rho, u, v, qv, pd_in
    INTEGER :: nl_in, icount
-
+! James H PDS
+   REAL , DIMENSION(:,:,:) , ALLOCATABLE :: zk2,p2_in
+   REAL , DIMENSION(:) , ALLOCATABLE :: zk3,p3_in,v3,u3
 
    INTEGER :: icm,jcm, ii, im1, jj, jm1, loop, error, fid, nxc, nyc, lm
    REAL    :: u_mean,v_mean, f0, p_surf, p_level, qvf, z_at_v, z_at_u
@@ -108,7 +110,12 @@ CONTAINS
    INTEGER :: it
    real :: thtmp, ptmp, temp(3)
    real :: t_min, t_max, xpos, xposml, xpospl ! used by grav2d_x
+! James H PDS
+   real :: tmpe,tmpf,tmpmsft,tmpmsfu,tmpmsfv,tmpsina,tmpcosa,tmpxland
+   real :: tmp_cen_lat,tmp_cen_lon,tmp_truelat1,tmp_truelat2,tsfc
+   integer:: is_water_tmp,map_proj_tmp
 
+   LOGICAL :: manual_grid ! James H PDS
    LOGICAL :: moisture_init
    LOGICAL :: stretch_grid, dry_sounding
    character (len=256) :: mminlu2
@@ -192,17 +199,29 @@ CONTAINS
    hm1  = 250.
 !   hm1  = 1000.
 
-
    stretch_grid = .true.
    delt = 0.
-!   z_scale = .40
-   z_scale = 8000./config_flags%ztop
+!   z_scale = .40   
+   z_scale = 8000./config_flags%ztop 
    pi = 2.*asin(1.0)
    write(6,*) ' pi is ',pi
    nxc = (ide-ids)/2
    nyc = (jde-jds)/2
 
-  CASE ( quarter_ss, squall2d_x, squall2d_y )
+  CASE ( quarter_ss )
+
+! Dave Nolan: remember "false" here means not stretched in eta (WRF coordinates)
+   stretch_grid = .false.
+   manual_grid = .false. ! JAH PDS
+   delt = 3.
+!   z_scale = .40  ! JAH: in PDS 3.9.1.1 
+   z_scale = 8000./config_flags%ztop ! JAH: new to WRF v4 
+   pi = 2.*asin(1.0)
+   write(6,*) ' pi is ',pi
+   nxc = (ide-ids)/2
+   nyc = (jde-jds)/2
+
+  CASE ( squall2d_x, squall2d_y )
 
    stretch_grid = .true.
    delt = 3.
@@ -288,9 +307,6 @@ CONTAINS
 
   END SELECT ideal_constants
 
-
-
-
 ! here we check to see if the boundary conditions are set properly
 
    CALL boundary_condition_check( config_flags, bdyzone, error, grid%id )
@@ -306,7 +322,7 @@ CONTAINS
 
   ideal_landmap: SELECT CASE ( model_config_rec%ideal_case )
 
-   CASE(hill2d_x, quarter_ss, squall2d_x, squall2d_y, grav2d_x)
+   CASE(hill2d_x, squall2d_x, squall2d_y, grav2d_x)
 
     CALL nl_set_mminlu(1,'    ')
     CALL nl_set_iswater(1,0)
@@ -319,7 +335,6 @@ CONTAINS
     CALL nl_set_pole_lon (1,0.)
     CALL nl_set_pole_lat (1,90.)
     CALL nl_set_map_proj(1,0)
-
 
 !  here we initialize data that currently is not initialized
 !  in the input data
@@ -340,6 +355,117 @@ CONTAINS
 
       END DO
    END DO
+
+   CASE(quarter_ss)
+
+!PDS Dave Nolan/Shuhua
+    open(unit=13,file='input_sounding_o',form='formatted',status='old')
+
+    read(13,*) tmp_cen_lat,tmp_cen_lon,tmp_truelat1,tmp_truelat2, &
+               map_proj_tmp,is_water_tmp
+    write(*,*) 'information'
+    write(*,*) tmp_cen_lat,tmp_cen_lon,tmp_truelat1,tmp_truelat2, &
+               map_proj_tmp,is_water_tmp
+
+
+!   CALL nl_set_mminlu(1,'    ')
+!   PDS: Hard wire land use table to USGS; must repeat in module_phys_init
+    CALL nl_set_mminlu(1,'USGS')
+    CALL nl_set_iswater(1,is_water_tmp)
+    CALL nl_set_cen_lat(1,tmp_cen_lat)
+    CALL nl_set_cen_lon(1,tmp_cen_lon)
+    CALL nl_set_truelat1(1,tmp_truelat1)
+    CALL nl_set_truelat2(1,tmp_truelat2)
+    CALL nl_set_moad_cen_lat (1,0.)
+    CALL nl_set_stand_lon (1,0.)
+    CALL nl_set_pole_lon (1,0.)
+    CALL nl_set_pole_lat (1,90.)
+    CALL nl_set_map_proj(1,map_proj_tmp)
+
+
+!  here we initialize data that currently is not initialized
+!  in the input data
+
+! JAH PDS: This is overridden by the read-ins below but we'll leave it to be safe:
+
+    DO j = jts, jte
+      DO i = its, ite
+         grid%msftx(i,j)    = 1.
+         grid%msfty(i,j)    = 1.
+         grid%msfux(i,j)    = 1.
+         grid%msfuy(i,j)    = 1.
+         grid%msfvx(i,j)    = 1.
+         grid%msfvx_inv(i,j)= 1.
+         grid%msfvy(i,j)    = 1.
+         grid%sina(i,j)     = 0.
+         grid%cosa(i,j)     = 1.
+         grid%e(i,j)        = 0.
+         grid%f(i,j)        = 0.
+
+      END DO
+   END DO
+
+! Dave Nolan/Shuhua:
+
+    DO j = jts, jte
+    DO i = its, ite
+       read(13,*) grid%e(i,j),grid%f(i,j),grid%msft(i,j),grid%msfu(i,j),grid%msfv(i,j), &
+                  grid%msftx(i,j),grid%msfux(i,j),grid%msfvx(i,j), &
+                  grid%msfty(i,j),grid%msfuy(i,j),grid%msfvy(i,j),grid%msfvx_inv(i,j), &
+                  grid%sina(i,j),grid%cosa(i,j),grid%xlat(i,j),grid%xlong(i,j), &
+                  grid%xland(i,j),grid%lu_index(i,j),grid%ht(i,j),grid%tmn(i,j),grid%tsk(i,j)
+       if (i .eq. 1 .and. j .eq. 1) write(*,*) &
+                  grid%e(i,j),grid%f(i,j),grid%msft(i,j),grid%msfu(i,j),grid%msfv(i,j), &
+                  grid%msftx(i,j),grid%msfux(i,j),grid%msfvx(i,j), &
+                  grid%msfty(i,j),grid%msfuy(i,j),grid%msfvy(i,j),grid%msfvx_inv(i,j), &
+                  grid%sina(i,j),grid%cosa(i,j),grid%xlat(i,j),grid%xlong(i,j), &
+                  grid%xland(i,j),grid%lu_index(i,j),grid%ht(i,j),grid%tmn(i,j),grid%tsk(i,j)
+    END DO
+    END DO
+
+! JAH: for Noah LSM, additional variables need to be initialized
+
+   other_masked_fields : SELECT CASE ( model_config_rec%sf_surface_physics(grid%id) )
+
+      CASE (SLABSCHEME)
+
+      CASE (LSMSCHEME)
+
+! James H: defaults are loam soil, cropland/woodland mosaic
+
+        DO j = jts , MIN(jde-1,jte)
+           DO i = its , MIN(ide-1,ite)
+              IF (grid%xland(i,j) .lt. 1.5) THEN
+                 grid%vegfra(i,j) = 1.0
+                 grid%canwat(i,j) = 0.
+                 grid%ivgtyp(i,j) = 6.
+                 grid%isltyp(i,j) = 6.
+                 grid%xice(i,j) = 0.
+                 grid%snow(i,j) = 0.
+              ELSE
+                 grid%vegfra(i,j) = 0.
+                 grid%canwat(i,j) = 0.
+                 grid%ivgtyp(i,j) = 16
+                 grid%isltyp(i,j) = 14
+                 grid%xice(i,j) = 0.
+                 grid%snow(i,j) = 0.
+              ENDIF
+           END DO
+        END DO
+
+      CASE (RUCLSMSCHEME)
+
+   END SELECT other_masked_fields
+
+! Process the soil; note that there are some things hard-wired into
+! share/module_soil_pre.F
+      CALL process_soil_ideal(grid%xland,grid%xice,grid%vegfra,grid%snow,grid%canwat, &
+                     grid%ivgtyp,grid%isltyp,grid%tslb,grid%smois, &
+                     grid%tsk,grid%tmn,grid%zs,grid%dzs,model_config_rec%num_soil_layers,&
+                     model_config_rec%sf_surface_physics(grid%id), &
+                                   ids,ide, jds,jde, kds,kde,&
+                                   ims,ime, jms,jme, kms,kme,&
+                                   its,ite, jts,jte, kts,kte )
 
    CASE(b_wave)
 
@@ -602,8 +728,8 @@ CONTAINS
 
    END SELECT ideal_landmap
 
-    DO j = jts, jte
-    DO k = kts, kte
+   DO j = jts, jte
+   DO k = kts, kte
       DO i = its, ite
          grid%ww(i,k,j)     = 0.
       END DO
@@ -615,7 +741,8 @@ CONTAINS
 ! set up the grid
 
    ideal_levels: SELECT CASE ( model_config_rec%ideal_case )
-   CASE(hill2d_x, quarter_ss, squall2d_x, squall2d_y, grav2d_x, b_wave)
+
+   CASE(hill2d_x, squall2d_x, squall2d_y, grav2d_x, b_wave)
    IF (stretch_grid) THEN ! exponential stretch for eta (nearly constant dz)
      DO k=1, kde
       grid%znw(k) = (exp(-(k-1)/float(kde-1)/z_scale) - exp(-1./z_scale))/ &
@@ -626,6 +753,28 @@ CONTAINS
       grid%znw(k) = 1. - float(k-1)/float(kde-1)
      ENDDO
    ENDIF
+
+   CASE(quarter_ss)
+! Dave Nolan/Stefan:
+   IF (manual_grid) THEN
+    print *,'MANUALLY SPECIFYING ZNW NOW'
+    open(unit=13,file='grd',form='formatted',status='old')
+    DO k=1, kde
+     read(13,*) grid%znw(k)
+     print *,'full level value = ',grid%znw(k)
+    ENDDO
+    close(unit=13)
+   ELSE IF (stretch_grid) THEN ! exponential stretch for eta (nearly constant dz)
+     DO k=1, kde
+      grid%znw(k) = (exp(-(k-1)/float(kde-1)/z_scale) - exp(-1./z_scale))/ &
+                                (1.-exp(-1./z_scale))
+     ENDDO
+   ELSE
+     DO k=1, kde
+      grid%znw(k) = 1. - float(k-1)/float(kde-1)
+     ENDDO
+   ENDIF
+
    CASE(convrad, seabreeze2d_x)
    IF (stretch_grid) THEN ! read eta_levels
      DO k=1, kde
@@ -651,6 +800,7 @@ CONTAINS
       grid%znw(k) = 1. - float(k-1)/float(kde-1)
      ENDDO
    ENDIF
+
    CASE(les)
        IF (model_config_rec%eta_levels(1) .EQ. -1) THEN !we do not have eta_levels from namelist
    IF (stretch_grid) THEN ! exponential stretch for eta (nearly constant dz)
@@ -758,15 +908,32 @@ CONTAINS
 !  we will be extrapolating above the highest height data to the south
 !  of the centerline.
 
+  CASE DEFAULT
 
-   CASE DEFAULT
+! Dave Nolan/Shuhua: get sounding in
+
+  open(unit=10,file='input_sounding',form='formatted',status='old')
+  open(unit=11,file='input_sounding_v',form='formatted',status='old')
+  open(unit=12,file='input_sounding_u',form='formatted',status='old')
 
   IF ( wrf_dm_on_monitor() ) THEN
   write(6,*) ' getting dry sounding for base state '
   dry_sounding = .true.
-  CALL get_sounding( zk, p_in, pd_in, theta, rho, u, v, qv, dry_sounding, &
-                     nl_max, nl_in, theta_surf)
+! CALL get_sounding( zk, p_in, pd_in, theta, rho, u, v, qv, dry_sounding, &
+!                    nl_max, nl_in, theta_surf)
+! PDS: Dave Nolan/Shuhua:
+  CALL get_sounding( 0, 0, zk, p_in, pd_in, theta, rho, u, v, qv, dry_sounding, tsfc, nl_max, nl_in )
+  ALLOCATE ( p2_in(its:ite,1:nl_in,jts:jte) )
+  ALLOCATE ( zk2(its:ite,1:nl_in,jts:jte) )
+  ALLOCATE ( p3_in(1:nl_in) )
+  ALLOCATE ( u3(1:nl_in) )
+  ALLOCATE ( v3(1:nl_in) )
+  ALLOCATE ( zk3(1:nl_in) )
+
+  rewind(10)
+
   ENDIF
+
   CALL wrf_dm_bcast_real( zk , nl_max )
   CALL wrf_dm_bcast_real( p_in , nl_max )
   CALL wrf_dm_bcast_real( pd_in , nl_max )
@@ -902,10 +1069,21 @@ CONTAINS
   ENDDO
   ENDDO
 
-  CASE (quarter_ss, convrad, squall2d_x, squall2d_y, grav2d_x, b_wave, seabreeze2d_x)
+  CASE (convrad, squall2d_x, squall2d_y, grav2d_x, b_wave, seabreeze2d_x)
+  DO j=jts,jte
+  DO i=its,ite
+    grid%ht(i,j) = 0.
+    grid%phb(i,1,j) = g*grid%ht(i,j)
+    grid%php(i,1,j) = 0.
+    grid%ph0(i,1,j) = grid%phb(i,1,j)
+  ENDDO
+  ENDDO
+
+  CASE (quarter_ss)
   DO j=jts,jte
   DO i=its,ite  
-    grid%ht(i,j) = 0.
+! Dave Nolan: height is read in now:
+!   grid%ht(i,j) = 0.
     grid%phb(i,1,j) = g*grid%ht(i,j)
     grid%php(i,1,j) = 0.
     grid%ph0(i,1,j) = grid%phb(i,1,j)
@@ -919,6 +1097,7 @@ CONTAINS
   ENDDO
   ENDDO
 
+! mountains only for LES
   xs=ide/2 -3
   xs=ids   -3
   xe=xs + 6
@@ -963,7 +1142,7 @@ CONTAINS
   DO I = its, ite
 
     p_surf = interp_0( p_in, zk, grid%phb(i,1,j)/g, nl_in )
-    grid%MUB(i,j) = p_surf-grid%p_top
+    grid%mub(i,j) = p_surf-grid%p_top
 
 !  this is dry hydrostatic sounding (base state), so given grid%p (coordinate),
 !  interp theta (from interp) and compute 1/rho from eqn. of state
@@ -985,7 +1164,7 @@ CONTAINS
   ENDDO
   IF ( wrf_dm_on_monitor() ) THEN
   write(6,*) ' ptop is ',grid%p_top
-  write(6,*) ' base state grid%MUB(1,1), p_surf is ',grid%MUB(1,1),grid%c3f(kts)*grid%MUB(1,1)+grid%c4f(kts)+grid%p_top
+  write(6,*) ' base state grid%MUB(1,1), p_surf is ',grid%mub(1,1),grid%c3f(kts)*grid%mub(1,1)+grid%c4f(kts)+grid%p_top
   ENDIF
 !  calculate full state for each column - this includes moisture.
   write(6,*) ' getting moist sounding for full state '
@@ -994,26 +1173,37 @@ CONTAINS
     IF (config_flags%mp_physics /= 0)  dry_sounding = .false.
   ELSE
     dry_sounding = .false.
-    CALL get_sounding( zk, p_in, pd_in, theta, rho, u, v, qv, dry_sounding, &
-                     nl_max, nl_in, theta_surf )
   ENDIF
+
   DO J = jts, min(jde-1,jte)
+  DO I = its, min(ide-1,ite)
   
-  IF ( model_config_rec%ideal_case .EQ. b_wave )THEN
+! IF ( model_config_rec%ideal_case .EQ. b_wave )THEN
 !  get sounding for this point
 !   debug = .false.  !  this will turn off print of the sounding
-    CALL get_sounding_b_wave( zk, p_in, pd_in, theta, rho, u, v, qv, dry_sounding, &
-                      nl_max, nl_in, u_jet, rho_jet, th_jet, z_jet,      &
-                      nz_jet, ny_jet, j, .false.                          )
-  ENDIF
-  DO I = its, min(ide-1,ite)
+!   CALL get_sounding_b_wave( zk, p_in, pd_in, theta, rho, u, v, qv, dry_sounding, &
+!                     nl_max, nl_in, u_jet, rho_jet, th_jet, z_jet,      &
+!                     nz_jet, ny_jet, j, .false.                          )
+! ENDIF
+
 !  At this point grid%p_top is already set. find the DRY mass in the column
 !  by interpolating the DRY pressure.  
-   pd_surf = interp_0( pd_in, zk, grid%phb(i,1,j)/g, nl_in )
+
+! Dave Nolan/Shuhua:
+    CALL get_sounding( i,j,zk, p_in, pd_in, theta, rho, u, v, qv, dry_sounding, grid%tsk(i,j), nl_max, nl_in )
+
+    do k=1,nl_in
+      p2_in (i,k,j)=p_in(k)
+      zk2(i,k,j)=zk(k)
+    enddo
+
+    pd_surf = interp_0( pd_in, zk, grid%phb(i,1,j)/g, nl_in )
+
 !  compute the perturbation mass and the full mass
-    grid%MU_1(i,j) = pd_surf-grid%p_top - grid%MUB(i,j)
-    grid%MU_2(i,j) = grid%MU_1(i,j)
-    grid%MU0(i,j) = grid%MU_1(i,j) + grid%MUB(i,j)
+    grid%mu_1(i,j) = pd_surf-grid%p_top - grid%mub(i,j)
+    grid%mu_2(i,j) = grid%mu_1(i,j)
+    grid%mu0(i,j) = grid%mu_1(i,j) + grid%mub(i,j)
+
 ! given the dry pressure and coordinate system, interp the potential
 ! temperature and qv
     do k=1,kde-1
@@ -1023,31 +1213,35 @@ CONTAINS
       grid%t_2(i,k,j)          = grid%t_1(i,k,j)
       
     enddo
+
 !  integrate the hydrostatic equation (from the RHS of the bigstep
 !  vertical momentum equation) down from the top to get grid%p.
 !  first from the top of the model to the top pressure
+
     kk = kte-1  ! top level
     k=kk+1
     qvf1 = 0.5*(moist(i,kk,j,P_QV)+moist(i,kk,j,P_QV))
     qvf2 = 1./(1.+qvf1)
     qvf1 = qvf1*qvf2
-    grid%p(i,kk,j) = - 0.5*((grid%c1f(k)*grid%Mu_1(i,j))+qvf1*(grid%c1f(k)*grid%Mub(i,j)+grid%c2f(k)))/grid%rdnw(kk)/qvf2
+    grid%p(i,kk,j) = - 0.5*((grid%c1f(k)*grid%mu_1(i,j))+qvf1*(grid%c1f(k)*grid%mub(i,j)+grid%c2f(k)))/grid%rdnw(kk)/qvf2
     qvf = 1. + rvovrd*moist(i,kk,j,P_QV)
     grid%alt(i,kk,j) = (r_d/p1000mb)*(grid%t_1(i,kk,j)+t0)*qvf* &
                 (((grid%p(i,kk,j)+grid%pb(i,kk,j))/p1000mb)**cvpm)
     grid%al(i,kk,j) = grid%alt(i,kk,j) - grid%alb(i,kk,j)
+
 !  down the column
     do kk=kte-2,1,-1
       k = kk + 1
       qvf1 = 0.5*(moist(i,kk,j,P_QV)+moist(i,kk+1,j,P_QV))
       qvf2 = 1./(1.+qvf1)
       qvf1 = qvf1*qvf2
-      grid%p(i,kk,j) = grid%p(i,kk+1,j) - ((grid%c1f(k)*grid%Mu_1(i,j)) + qvf1*(grid%c1f(k)*grid%Mub(i,j)+grid%c2f(k)))/qvf2/grid%rdn(kk+1)
+      grid%p(i,kk,j) = grid%p(i,kk+1,j) - ((grid%c1f(k)*grid%mu_1(i,j)) + qvf1*(grid%c1f(k)*grid%mub(i,j)+grid%c2f(k)))/qvf2/grid%rdn(kk+1)
       qvf = 1. + rvovrd*moist(i,kk,j,P_QV)
       grid%alt(i,kk,j) = (r_d/p1000mb)*(grid%t_1(i,kk,j)+t0)*qvf* &
                   (((grid%p(i,kk,j)+grid%pb(i,kk,j))/p1000mb)**cvpm)
       grid%al(i,kk,j) = grid%alt(i,kk,j) - grid%alb(i,kk,j)
     enddo
+
 !  this is the hydrostatic equation used in the model after the
 !  small timesteps.  In the model, grid%al (inverse density)
 !  is computed from the geopotential.
@@ -1086,51 +1280,53 @@ CONTAINS
 
 !===============
   ideal_pert: SELECT CASE ( model_config_rec%ideal_case )
-  CASE (quarter_ss)
-!  QSS thermal perturbation to kick off convection
+!  Dave Nolan: comment all this out, no perturbation of this type:
+   CASE (quarter_ss)
+!!  QSS thermal perturbation to kick off convection
 
-  write(6,*) ' nxc, nyc for perturbation ',nxc,nyc
-  write(6,*) ' delt for perturbation ',delt
+!  write(6,*) ' nxc, nyc for perturbation ',nxc,nyc
+!  write(6,*) ' delt for perturbation ',delt
 
-  DO J = jts, min(jde-1,jte)
-    yrad = config_flags%dy*float(j-nyc)/10000.
-!   yrad = 0.
-    DO I = its, min(ide-1,ite)
-      xrad = config_flags%dx*float(i-nxc)/10000.
-!     xrad = 0.
-      DO K = 1, kte-1
+!  DO J = jts, min(jde-1,jte)
+!    yrad = config_flags%dy*float(j-nyc)/10000.
+!!   yrad = 0.
+!    DO I = its, min(ide-1,ite)
+!      xrad = config_flags%dx*float(i-nxc)/10000.
+!!     xrad = 0.
+!      DO K = 1, kte-1
 
-!  put in preturbation theta (bubble) and recalc density.  note,
+!  put in perturbation theta (bubble) and recalc density.  note,
 !  the mass in the column is not changing, so when theta changes,
 !  we recompute density and geopotential
 
-        zrad = 0.5*(grid%ph_1(i,k,j)+grid%ph_1(i,k+1,j)  &
-                   +grid%phb(i,k,j)+grid%phb(i,k+1,j))/g
-        zrad = (zrad-1500.)/1500.
-        RAD=SQRT(xrad*xrad+yrad*yrad+zrad*zrad)
-        IF(RAD <= 1.) THEN
-           grid%t_1(i,k,j)=grid%t_1(i,k,j)+delt*COS(.5*PI*RAD)**2
-           grid%t_2(i,k,j)=grid%t_1(i,k,j)
-           qvf = 1. + rvovrd*moist(i,k,j,P_QV)
-           grid%alt(i,k,j) = (r_d/p1000mb)*(grid%t_1(i,k,j)+t0)*qvf* &
-                        (((grid%p(i,k,j)+grid%pb(i,k,j))/p1000mb)**cvpm)
-           grid%al(i,k,j) = grid%alt(i,k,j) - grid%alb(i,k,j)
-        ENDIF
-      ENDDO
+!        zrad = 0.5*(grid%ph_1(i,k,j)+grid%ph_1(i,k+1,j)  &
+!                   +grid%phb(i,k,j)+grid%phb(i,k+1,j))/g
+!        zrad = (zrad-1500.)/1500.
+!        RAD=SQRT(xrad*xrad+yrad*yrad+zrad*zrad)
+!        IF(RAD <= 1.) THEN
+!           grid%t_1(i,k,j)=grid%t_1(i,k,j)+delt*COS(.5*PI*RAD)**2
+!           grid%t_2(i,k,j)=grid%t_1(i,k,j)
+!           qvf = 1. + rvovrd*moist(i,k,j,P_QV)
+!           grid%alt(i,k,j) = (r_d/p1000mb)*(grid%t_1(i,k,j)+t0)*qvf* &
+!                        (((grid%p(i,k,j)+grid%pb(i,k,j))/p1000mb)**cvpm)
+!           grid%al(i,k,j) = grid%alt(i,k,j) - grid%alb(i,k,j)
+!        ENDIF
+!      ENDDO
 
 !  rebalance hydrostatically
 
-      DO k = 2,kte
-        grid%ph_1(i,k,j) = grid%ph_1(i,k-1,j) - (grid%dnw(k-1))*(       &
-                     ((grid%c1h(k-1)*grid%mub(i,j)+grid%c2h(k-1))+(grid%c1h(k-1)*grid%mu_1(i,j)))*grid%al(i,k-1,j)+ &
-                      (grid%c1h(k-1)*grid%mu_1(i,j))*grid%alb(i,k-1,j)  )
+!      DO k  = 2,kte
+!        grid%ph_1(i,k,j) = grid%ph_1(i,k-1,j) - (grid%dnw(k-1))*(       &
+!                     ((grid%c1h(k)*grid%mub(i,j)+grid%c2h(k))+(grid%c1h(k)*grid%mu_1(i,j)))*grid%al(i,k-1,j)+ &
+!                      (grid%c1h(k)*grid%mu_1(i,j))*grid%alb(i,k-1,j)  )
+!
+!        grid%ph_2(i,k,j) = grid%ph_1(i,k,j)
+!        grid%ph0(i,k,j) = grid%ph_1(i,k,j) + grid%phb(i,k,j)
+!      ENDDO
+!
+!    ENDDO
+!  ENDDO
 
-        grid%ph_2(i,k,j) = grid%ph_1(i,k,j)
-        grid%ph0(i,k,j) = grid%ph_1(i,k,j) + grid%phb(i,k,j)
-      ENDDO
-
-    ENDDO
-  ENDDO
   CASE (squall2d_x)
 !  QSS thermal perturbation to kick off convection
 
@@ -1165,10 +1361,10 @@ CONTAINS
 
 !  rebalance hydrostatically
 
-      DO k = 2,kte
+      DO k  = 2,kte
         grid%ph_1(i,k,j) = grid%ph_1(i,k-1,j) - (grid%dnw(k-1))*(       &
-                     ((grid%c1h(k-1)*grid%mub(i,j)+grid%c2h(k-1))+(grid%c1h(k-1)*grid%mu_1(i,j)))*grid%al(i,k-1,j)+ &
-                      (grid%c1h(k-1)*grid%mu_1(i,j))*grid%alb(i,k-1,j)  )
+                     ((grid%c1h(k)*grid%mub(i,j)+grid%c2h(k))+(grid%c1h(k)*grid%mu_1(i,j)))*grid%al(i,k-1,j)+ &
+                      (grid%c1h(k)*grid%mu_1(i,j))*grid%alb(i,k-1,j)  )
 
         grid%ph_2(i,k,j) = grid%ph_1(i,k,j)
         grid%ph0(i,k,j) = grid%ph_1(i,k,j) + grid%phb(i,k,j)
@@ -1212,8 +1408,8 @@ CONTAINS
 
       DO k  = 2,kte
         grid%ph_1(i,k,j) = grid%ph_1(i,k-1,j) - (grid%dnw(k-1))*(       &
-                     ((grid%c1h(k-1)*grid%mub(i,j)+grid%c2h(k-1))+(grid%c1h(k-1)*grid%mu_1(i,j)))*grid%al(i,k-1,j)+ &
-                      (grid%c1h(k-1)*grid%mu_1(i,j))*grid%alb(i,k-1,j)  )
+                     ((grid%c1h(k)*grid%mub(i,j)+grid%c2h(k))+(grid%c1h(k)*grid%mu_1(i,j)))*grid%al(i,k-1,j)+ &
+                      (grid%c1h(k)*grid%mu_1(i,j))*grid%alb(i,k-1,j)  )
 
         grid%ph_2(i,k,j) = grid%ph_1(i,k,j)
         grid%ph0(i,k,j) = grid%ph_1(i,k,j) + grid%phb(i,k,j)
@@ -1245,8 +1441,8 @@ CONTAINS
 
       DO k  = 2,kte
         grid%ph_1(i,k,j) = grid%ph_1(i,k-1,j) - (grid%dnw(k-1))*(       &
-                     ((grid%c1h(k-1)*grid%mub(i,j)+grid%c2h(k-1))+(grid%c1h(k-1)*grid%mu_1(i,j)))*grid%al(i,k-1,j)+ &
-                      (grid%c1h(k-1)*grid%mu_1(i,j))*grid%alb(i,k-1,j)  )
+                     ((grid%c1h(k)*grid%mub(i,j)+grid%c2h(k))+(grid%c1h(k)*grid%mu_1(i,j)))*grid%al(i,k-1,j)+ &
+                      (grid%c1h(k)*grid%mu_1(i,j))*grid%alb(i,k-1,j)  )
         grid%ph_2(i,k,j) = grid%ph_1(i,k,j)
         grid%ph0(i,k,j) = grid%ph_1(i,k,j) + grid%phb(i,k,j)
       ENDDO
@@ -1306,8 +1502,8 @@ CONTAINS
 
       DO k  = 2,kte
         grid%ph_1(i,k,j) = grid%ph_1(i,k-1,j) - (grid%dnw(k-1))*(       &
-                     ((grid%c1h(k-1)*grid%mub(i,j)+grid%c2h(k-1))+(grid%c1h(k-1)*grid%mu_1(i,j)))*grid%al(i,k-1,j)+ &
-                      (grid%c1h(k-1)*grid%mu_1(i,j))*grid%alb(i,k-1,j)  )
+                     ((grid%c1h(k)*grid%mub(i,j)+grid%c2h(k))+(grid%c1h(k)*grid%mu_1(i,j)))*grid%al(i,k-1,j)+ &
+                      (grid%c1h(k)*grid%mu_1(i,j))*grid%alb(i,k-1,j)  )
 
         grid%ph_2(i,k,j) = grid%ph_1(i,k,j)
         grid%ph0(i,k,j) = grid%ph_1(i,k,j) + grid%phb(i,k,j)
@@ -1355,8 +1551,8 @@ CONTAINS
 
       DO k  = 2,kte
         grid%ph_1(i,k,j) = grid%ph_1(i,k-1,j) - (grid%dnw(k-1))*(       &
-                     ((grid%c1h(k-1)*grid%mub(i,j)+grid%c2h(k-1))+(grid%c1h(k-1)*grid%mu_1(i,j)))*grid%al(i,k-1,j)+ &
-                      (grid%c1h(k-1)*grid%mu_1(i,j))*grid%alb(i,k-1,j)  )
+                     ((grid%c1h(k)*grid%mub(i,j)+grid%c2h(k))+(grid%c1h(k)*grid%mu_1(i,j)))*grid%al(i,k-1,j)+ &
+                      (grid%c1h(k)*grid%mu_1(i,j))*grid%alb(i,k-1,j)  )
 
         grid%ph_2(i,k,j) = grid%ph_1(i,k,j)
         grid%ph0(i,k,j) = grid%ph_1(i,k,j) + grid%phb(i,k,j)
@@ -1430,38 +1626,38 @@ CONTAINS
 
 !  Test for resting atmosphere
 
-  DO iter_loop = 1, 100
-     DO J = jts, min(jde-1,jte)
-        DO I = its, min(ide-1,ite)
-            DO K = 2, kte-1
-               z1 = (grid%phb(i,k+1,j)+grid%ph_1(i,k+1,j))/g
-               z2 = (grid%phb(i,k  ,j)+grid%ph_1(i,k  ,j))/g
-               z=(z1+z2)/2.
-               IF ( z .LT. 10000 ) THEN
-                  Nsq = 1.E-4
-               ELSE
-                  Nsq = 4.E-4
-               END IF
-               grid%t_1(i,k,j)=(grid%t_1(i,k-1,j)+t0) * EXP(Nsq / g * (z1-z2)) - t0
-               grid%t_2(i,k,j)=grid%t_1(i,k,j)
-               qvf = 1. + rvovrd*moist(i,k,j,P_QV)
-               grid%alt(i,k,j) = (r_d/p1000mb)*(grid%t_1(i,k,j)+t0)*qvf* &
-                                 (((grid%p(i,k,j)+grid%pb(i,k,j))/p1000mb)**cvpm)
-               grid%al(i,k,j) = grid%alt(i,k,j) - grid%alb(i,k,j)
-            ENDDO
-      
-            DO kk  = 2,kte
-              k = kk - 1
-              grid%ph_1(i,kk,j) = grid%ph_1(i,kk-1,j) - (grid%dnw(kk-1))*(       &
-                           ((grid%c1h(k)*grid%mub(i,j)+grid%c2h(k))+(grid%c1h(k)*grid%mu_1(i,j)))*grid%al(i,kk-1,j)+ &
-                            (grid%c1h(k)*grid%mu_1(i,j))*grid%alb(i,kk-1,j)  )
-      
-              grid%ph_2(i,kk,j) = grid%ph_1(i,kk,j)
-              grid%ph0(i,kk,j) = grid%ph_1(i,kk,j) + grid%phb(i,kk,j)
-            ENDDO
-        ENDDO
-     ENDDO
-  END DO
+! DO iter_loop = 1, 100
+!    DO J = jts, min(jde-1,jte)
+!       DO I = its, min(ide-1,ite)
+!           DO K = 2, kte-1
+!              z1 = (grid%phb(i,k+1,j)+grid%ph_1(i,k+1,j))/g
+!              z2 = (grid%phb(i,k  ,j)+grid%ph_1(i,k  ,j))/g
+!              z=(z1+z2)/2.
+!              IF ( z .LT. 10000 ) THEN
+!                 Nsq = 1.E-4
+!              ELSE
+!                 Nsq = 4.E-4
+!              END IF
+!              grid%t_1(i,k,j)=(grid%t_1(i,k-1,j)+t0) * EXP(Nsq / g * (z1-z2)) - t0
+!              grid%t_2(i,k,j)=grid%t_1(i,k,j)
+!              qvf = 1. + rvovrd*moist(i,k,j,P_QV)
+!              grid%alt(i,k,j) = (r_d/p1000mb)*(grid%t_1(i,k,j)+t0)*qvf* &
+!                                (((grid%p(i,k,j)+grid%pb(i,k,j))/p1000mb)**cvpm)
+!              grid%al(i,k,j) = grid%alt(i,k,j) - grid%alb(i,k,j)
+!           ENDDO
+!     
+!           DO kk  = 2,kte
+!             k = kk - 1
+!             grid%ph_1(i,kk,j) = grid%ph_1(i,kk-1,j) - (grid%dnw(kk-1))*(       &
+!                          ((grid%c1h(k)*grid%mub(i,j)+grid%c2h(k))+(grid%c1h(k)*grid%mu_1(i,j)))*grid%al(i,kk-1,j)+ &
+!                           (grid%c1h(k)*grid%mu_1(i,j))*grid%alb(i,kk-1,j)  )
+!     
+!             grid%ph_2(i,kk,j) = grid%ph_1(i,kk,j)
+!             grid%ph0(i,kk,j) = grid%ph_1(i,kk,j) + grid%phb(i,kk,j)
+!           ENDDO
+!       ENDDO
+!    ENDDO
+! END DO
 
 !===============
 #endif
@@ -1524,11 +1720,41 @@ CONTAINS
       z_at_v = 0.5*(grid%phb(i,1,j)+grid%phb(i,1,j-1))/g
     END IF
 
-    p_surf = interp_0( p_in, zk, z_at_v, nl_in )
+! PDS Dave Nolan/Shuhua:
+    if (j .eq. 1 .or. j .eq. ide) then
+       if (j .eq. 1) then
+          do K = 1, nl_in
+             p3_in(k)=p2_in(i,k,j)
+             zk3(k)  =zk2  (i,k,j)
+!            print*,'p3 1=',p3_in(k),zk3(k)
+          enddo
+       else
+          do K = 1, nl_in
+             p3_in(k)=p2_in(i,k,j-1)
+             zk3(k)  =zk2  (i,k,j-1)
+!            print*,'p3 2=',p3_in(k),zk3(k)
+          enddo
+       endif
+    else
+       do K = 1, nl_in
+          p3_in(k)=(p2_in(i,k,j-1)+p2_in(i,k,j))/2.
+          zk3(k)  =(zk2  (i,k,j-1)+zk2  (i,k,j))/2.
+!         print*,'p3 3=',p3_in(k),zk3(k)
+       enddo
+    endif
+    p_surf = interp_0( p3_in, zk3, z_at_v, nl_in )
+
+! Dave Nolan/Shuhua: Read in the v3:
+    DO K = 1, nl_in
+        read(11,*) v3(k)
+!       print*,'v=',k,v3(k)
+    ENDDO
 
     DO K = 1, kte
       p_level = grid%c3h(k)*(p_surf - grid%p_top) + grid%c4h(k) + grid%p_top
-      grid%v_1(i,k,j) = interp_0( v, p_in, p_level, nl_in )
+! PDS Dave Nolan/Shuhua: interpolate the 3D v
+!      grid%v_1(i,k,j) = interp_0( v, p_in, p_level, nl_in )
+      grid%v_1(i,k,j) = interp_0( v3, p3_in, p_level, nl_in )
       grid%v_2(i,k,j) = grid%v_1(i,k,j)
     ENDDO
   ENDDO
@@ -1543,10 +1769,38 @@ CONTAINS
     ELSE
       z_at_u = 0.5*(grid%phb(i,1,j)+grid%phb(i-1,1,j))/g
     END IF
-    p_surf = interp_0( p_in, zk, z_at_u, nl_in )
+! PDS Dave Nolan/Shuhua
+    if (i .eq. 1 .or. i .eq. ide) then
+       if (i .eq. 1) then
+          do K = 1, nl_in
+             p3_in(k)=p2_in(i,k,j)
+             zk3(k)  =zk2  (i,k,j)
+          enddo
+       else
+          do K = 1, nl_in
+             p3_in(k)=p2_in(i-1,k,j)
+             zk3(k)  =zk2  (i-1,k,j)
+          enddo
+       endif
+    else
+       do K = 1, nl_in
+          p3_in(k)=(p2_in(i-1,k,j)+p2_in(i,k,j))/2.
+          zk3(k)  =(zk2  (i-1,k,j)+zk2  (i,k,j))/2.
+       enddo
+    endif
+    p_surf = interp_0( p3_in, zk3, z_at_u, nl_in )
+!    p_surf = interp_0( p_in, zk, z_at_u, nl_in )
+
+! PDS Dave Nolan/Shuhua: Read in the u3:
+    DO K = 1, nl_in
+        read(12,*) u3(k)
+    ENDDO
+
     DO K = 1, kte
       p_level = grid%c3h(k)*(p_surf - grid%p_top) + grid%c4h(k) + grid%p_top
-      grid%u_1(i,k,j) = interp_0( u, p_in, p_level, nl_in )
+! Dave Nolan/Shuhua: interpolate the 3D u
+!      grid%u_1(i,k,j) = interp_0( u, p_in, p_level, nl_in )
+      grid%u_1(i,k,j) = interp_0( u3, p3_in, p_level, nl_in )
       grid%u_2(i,k,j) = grid%u_1(i,k,j)
     ENDDO
 
@@ -1604,8 +1858,9 @@ CONTAINS
      ptmp    = grid%p(i,3,j)+grid%pb(i,3,j)
      temp(3) = thtmp * (ptmp/p1000mb)**rcp
 
-     grid%tsk(I,J)=grid%cf1*temp(1)+grid%cf2*temp(2)+grid%cf3*temp(3)
-     grid%tmn(I,J)=grid%tsk(I,J)-0.5
+! Dave Nolan: These are now read in:
+!     grid%tsk(I,J)=grid%cf1*temp(1)+grid%cf2*temp(2)+grid%cf3*temp(3)
+!     grid%tmn(I,J)=grid%tsk(I,J)-0.5
   ENDDO
   ENDDO
 
@@ -1764,11 +2019,12 @@ CONTAINS
 !
 !---------------------------------------------------------------------------
 
-      subroutine get_sounding( zk, p, p_dry, theta, rho, &
-                               u, v, qv, dry, nl_max, nl_in, th_surf )
+! PDS Dave Nolan: add new variables: i_row, jcol, tsfc
+      subroutine get_sounding( irow, jcol,zk, p, p_dry, theta, rho, &
+                               u, v, qv, dry, tsfc, nl_max, nl_in )
       implicit none
 
-      integer nl_max, nl_in
+      integer nl_max, nl_in, irow, jcol
       real zk(nl_max), p(nl_max), theta(nl_max), rho(nl_max), &
            u(nl_max), v(nl_max), qv(nl_max), p_dry(nl_max)
       logical dry
@@ -1781,7 +2037,7 @@ CONTAINS
 
 ! input sounding data
 
-      real p_surf, th_surf, qv_surf
+      real p_surf, th_surf, qv_surf, tsfc
       real pi_surf, pi(n)
       real h_input(n), th_input(n), qv_input(n), u_input(n), v_input(n)
 
@@ -1792,15 +2048,19 @@ CONTAINS
 
 ! local data
 
-      real r
-      parameter (r = r_d)
+! PDS Dave Nolan/Shuhua:
+      real p1000mb,cv,cp,r,cvpm,g
+      parameter (p1000mb = 1.e+05, r = 287, cp = 1003., cv = cp-r, cvpm = -cv/cp, g=9.81 )
       integer k, it, nl
       real qvf, qvf1, dz
 
 !  first, read the sounding
 
-      call read_sounding( p_surf, th_surf, qv_surf, &
+! PDS
+      call read_sounding( irow, jcol, p_surf, th_surf, tsfc, qv_surf, &
                           h_input, th_input, qv_input, u_input, v_input,n, nl, debug )
+!     call read_sounding( p_surf, th_surf, qv_surf, &
+!                         h_input, th_input, qv_input, u_input, v_input,n, nl, debug )
 
 !        iz = 1
 !        do k=2,nl
@@ -1925,42 +2185,44 @@ CONTAINS
       end subroutine get_sounding
 
 !-------------------------------------------------------
-
-      subroutine read_sounding( ps,ts,qvs,h,th,qv,u,v,n,nl,debug )
+!PDS Dave Nolan: Added new variables
+      subroutine read_sounding(irow,jcol,ps,ts,tsfc,qvs,h,th,qv,u,v,n,nl,debug)
       implicit none
-      integer n,nl
-      real ps,ts,qvs,h(n),th(n),qv(n),u(n),v(n)
-      logical end_of_file
+      integer irow,jcol,n,nl,itmp,jtmp
+      real ps,ts,qvs,h(n),th(n),qv(n),u(n),v(n),tsfc
+      logical end_of_column
       logical debug
 
       integer k
 
-      open(unit=10,file='input_sounding',form='formatted',status='old')
-      rewind(10)
-      read(10,*) ps, ts, qvs
+!     open(unit=10,file='input_sounding',form='formatted',status='old')
+!     rewind(10)
+      read(10,*) itmp, jtmp, ps, ts, tsfc, qvs
       if(debug) then
         write(6,*) ' input sounding surface parameters '
         write(6,*) ' surface pressure (mb) ',ps
         write(6,*) ' surface pot. temp (K) ',ts
         write(6,*) ' surface mixing ratio (g/kg) ',qvs
-      end if
+      endif
 
-      end_of_file = .false.
+      end_of_column = .false.
       k = 0
 
-      do while (.not. end_of_file)
+      do while (.not. end_of_column)
 
-        read(10,*,end=100) h(k+1), th(k+1), qv(k+1), u(k+1), v(k+1)
-        k = k+1
-        if(debug) write(6,'(1x,i3,5(1x,e10.3))') k, h(k), th(k), qv(k), u(k), v(k)
-        go to 110
- 100    end_of_file = .true.
- 110    continue
+        read(10,*) h(k+1), th(k+1), qv(k+1), u(k+1), v(k+1)
+        if (h(k+1) .eq. -999.) end_of_column = .true.
+        if(.not. end_of_column) k = k+1
+ !       k = k+1
+ !       if(debug) write(6,'(1x,i3,5(1x,e10.3))') k, h(k), th(k), qv(k), u(k), v(k)
+ !       go to 110
+ !100    end_of_file = .true.
       enddo
+ 100  continue
 
       nl = k
 
-      close(unit=10,status = 'keep')
+!     close(unit=10,status = 'keep')
 
       end subroutine read_sounding
 
