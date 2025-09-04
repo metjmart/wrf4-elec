@@ -1098,6 +1098,11 @@ CHARACTER(LEN=8) :: name
 !-- temporary fix by ww
    landuse_ISICE = isice
 
+! James Hlywiak: For some reason, have to hardwire to USGS:
+   mminlu_loc='USGS'
+   print *, 'in phys_init, mminlu_loc=',mminlu_loc
+   print *, 'in phys_init, iswater=',iswater
+
 !..Determine which cu_rad_feedback option to use
 
    icloud_cu = 0
@@ -1162,6 +1167,9 @@ CHARACTER(LEN=8) :: name
         rliq(:,:) = 0.0 
      ENDIF
  ENDIF
+   
+! James Hlywiak: wrap following in #if 0 to fix outer domain lu_index issue
+#if 0
    IF ( .NOT. moved ) THEN
    DO j=jts,jtf
    DO i=its,itf
@@ -1185,6 +1193,7 @@ CHARACTER(LEN=8) :: name
    ENDDO
    ENDDO
    ENDIF
+#endif
 
    DO j=jts,jtf
    DO i=its,itf
