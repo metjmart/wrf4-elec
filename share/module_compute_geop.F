@@ -56,6 +56,19 @@ CONTAINS
    enddo
    enddo
 
+! hack by Dave Nolan - smooth height field before using for tracking
+! otherwise will track convection noise for weak vortices
+   do k=1,100
+   do j = jts+1, min(jde-1,jte)-1
+   do i = its+1, min(ide-1,ite)-1
+
+      height(i,j) = 0.166667*( height(i,j-1) + height(i,j+1) +  &
+               height(i+1,j) + height(i-1,j) + 2.0*(height(i,j)) )
+
+   enddo
+   enddo
+   enddo
+
    end subroutine compute_500mb_height
 
 !--------
