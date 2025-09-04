@@ -597,45 +597,46 @@
          END DO
       END IF
 
-      DO j = jts, MIN(jte,jde-1)
-         DO i = its, MIN(ite,ide-1)
-            !  Base state pressure is a function of eta level and terrain, only, plus
-            !  the hand full of constants: p00 (sea level pressure, Pa), t00 (sea level
-            !  temperature, K), A (temperature difference, from 1000 mb to 300 mb, K),
-            !  tiso (isothermal temperature at tropopause/lower stratosphere),
-            !  p_strat (pressure at top of isothermal layer), A_strat (lapse rate in
-            !  stratosphere above isothermal layer)
-            p_surf = p00 * EXP ( -t00/a + ( (t00/a)**2 - 2.*g*grid%ht(i,j)/a/r_d ) **0.5 )
-            DO k = 1, kte-1
-               grid%pb(i,k,j) = grid%c3h(k)*(p_surf - grid%p_top) + grid%c4h(k) + grid%p_top
-               temp = MAX ( tiso, t00 + A*LOG(grid%pb(i,k,j)/p00) )
-               IF ( grid%pb(i,k,j) .LT. p_strat ) THEN
-                  temp = tiso + A_strat * LOG ( grid%pb(i,k,j)/p_strat )
-               ENDIF
-               grid%t_init(i,k,j) = temp*(p00/grid%pb(i,k,j))**(r_d/cp) - t0
-               grid%alb(i,k,j) = (r_d/p1000mb)*(grid%t_init(i,k,j)+t0)*(grid%pb(i,k,j)/p1000mb)**cvpm
-            END DO
-            !  Base state mu is defined as base state surface pressure minus grid%p_top
-            grid%MUB(i,j) = p_surf - grid%p_top
-            !  Integrate base geopotential, starting at terrain elevation.  This assures that
-            !  the base state is in exact hydrostatic balance with respect to the model equations.
-            !  This field is on full levels.
-            grid%phb(i,1,j) = grid%ht(i,j) * g
-            IF ( config_flags%hypsometric_opt .EQ. 1 ) THEN
-               DO kk  = 2,kte
-                  k = kk - 1
-                  grid%phb(i,kk,j) = grid%phb(i,kk-1,j) - grid%dnw(kk-1)*(grid%c1h(k)*grid%mub(i,j)+grid%c2h(k))*grid%alb(i,kk-1,j)
-               END DO
-            ELSE IF ( config_flags%hypsometric_opt .EQ. 2 ) THEN
-               DO k  = 2,kte
-                  pfu = grid%c3f(k  )*grid%MUB(i,j) + grid%c4f(k  ) + grid%p_top
-                  pfd = grid%c3f(k-1)*grid%MUB(i,j) + grid%c4f(k-1) + grid%p_top
-                  phm = grid%c3h(k-1)*grid%MUB(i,j) + grid%c4h(k-1) + grid%p_top
-                  grid%phb(i,k,j) = grid%phb(i,k-1,j) + grid%alb(i,k-1,j)*phm*LOG(pfd/pfu)
-               END DO
-            END IF
-         END DO
-      END DO
+! James Hlywiak: Eliminate rebalancing
+!      DO j = jts, MIN(jte,jde-1)
+!         DO i = its, MIN(ite,ide-1)
+!            !  Base state pressure is a function of eta level and terrain, only, plus
+!            !  the hand full of constants: p00 (sea level pressure, Pa), t00 (sea level
+!            !  temperature, K), A (temperature difference, from 1000 mb to 300 mb, K),
+!            !  tiso (isothermal temperature at tropopause/lower stratosphere),
+!            !  p_strat (pressure at top of isothermal layer), A_strat (lapse rate in
+!            !  stratosphere above isothermal layer)
+!            p_surf = p00 * EXP ( -t00/a + ( (t00/a)**2 - 2.*g*grid%ht(i,j)/a/r_d ) **0.5 )
+!            DO k = 1, kte-1
+!               grid%pb(i,k,j) = grid%c3h(k)*(p_surf - grid%p_top) + grid%c4h(k) + grid%p_top
+!               temp = MAX ( tiso, t00 + A*LOG(grid%pb(i,k,j)/p00) )
+!               IF ( grid%pb(i,k,j) .LT. p_strat ) THEN
+!                  temp = tiso + A_strat * LOG ( grid%pb(i,k,j)/p_strat )
+!               ENDIF
+!               grid%t_init(i,k,j) = temp*(p00/grid%pb(i,k,j))**(r_d/cp) - t0
+!               grid%alb(i,k,j) = (r_d/p1000mb)*(grid%t_init(i,k,j)+t0)*(grid%pb(i,k,j)/p1000mb)**cvpm
+!            END DO
+!            !  Base state mu is defined as base state surface pressure minus grid%p_top
+!            grid%MUB(i,j) = p_surf - grid%p_top
+!            !  Integrate base geopotential, starting at terrain elevation.  This assures that
+!            !  the base state is in exact hydrostatic balance with respect to the model equations.
+!            !  This field is on full levels.
+!            grid%phb(i,1,j) = grid%ht(i,j) * g
+!            IF ( config_flags%hypsometric_opt .EQ. 1 ) THEN
+!               DO kk  = 2,kte
+!                  k = kk - 1
+!                  grid%phb(i,kk,j) = grid%phb(i,kk-1,j) - grid%dnw(kk-1)*(grid%c1h(k)*grid%mub(i,j)+grid%c2h(k))*grid%alb(i,kk-1,j)
+!               END DO
+!            ELSE IF ( config_flags%hypsometric_opt .EQ. 2 ) THEN
+!               DO k  = 2,kte
+!                  pfu = grid%c3f(k  )*grid%MUB(i,j) + grid%c4f(k  ) + grid%p_top
+!                  pfd = grid%c3f(k-1)*grid%MUB(i,j) + grid%c4f(k-1) + grid%p_top
+!                  phm = grid%c3h(k-1)*grid%MUB(i,j) + grid%c4h(k-1) + grid%p_top
+!                  grid%phb(i,k,j) = grid%phb(i,k-1,j) + grid%alb(i,k-1,j)*phm*LOG(pfd/pfu)
+!               END DO
+!            END IF
+!         END DO
+!      END DO
    ENDIF
    IF(.not.config_flags%restart)THEN
 !  if this is for a nested domain, the defined/interpolated fields are the _2
