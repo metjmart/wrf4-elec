@@ -1,6 +1,18 @@
 !WRF:MEDIATION_LAYER:SOLVER
 
-SUBROUTINE solve_em ( grid , config_flags  &
+! Matt Onderlinde Sep, 2013
+! Add nudge base profile variables to solve_em() subroutine
+SUBROUTINE solve_em ( grid, config_flags  &
+                      uold_base,                         &
+                      vold_base,                         &
+                      told_base,                         &
+                      qold_base,                         &
+                      unew_base,                         &
+                      vnew_base,                         &
+                      tnew_base,                         &
+                      qnew_base,                         &
+                      nudge_indicator,                   &
+                      d01_gfdda_interval_m               &
 ! Arguments generated from Registry
 #include "dummy_new_args.inc"
 !
@@ -214,6 +226,21 @@ SUBROUTINE solve_em ( grid , config_flags  &
    LOGICAL                                    :: adapt_step_flag
    LOGICAL                                    :: fill_w_flag
 
+! Matt Onderlinde Sep, 2013
+! Introduce variables for u_base, v_base, t_base, qv_base based on the
+! nudging input
+   REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: uold_base
+   REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: vold_base
+   REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: told_base
+   REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: qold_base
+   REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: unew_base
+   REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: vnew_base
+   REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: tnew_base
+   REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: qnew_base
+   INTEGER, INTENT(IN) :: nudge_indicator, d01_gfdda_interval_m
+   INTEGER :: curr_secs_int, curr_secs_int_check, iiii, nudge_interval
+   REAL :: curr_secs_nudging, curr_secs_val, curr_secs_val_check,fraction_timestep
+
 ! variables for flux-averaging code 20091223
    CHARACTER*256                              :: message, message2, message3
    REAL                                       :: old_dt
@@ -344,6 +371,12 @@ SUBROUTINE solve_em ( grid , config_flags  &
    tmpTimeInterval2 = domain_get_current_time ( grid ) - domain_get_start_time ( grid )
    curr_secs  = real_time(tmpTimeInterval)
    curr_secs2 = real_time(tmpTimeInterval2)
+
+   !!!--- Matt Onderlinde (July 2015) --- Compute time since model start, or
+   !since restart time
+   !!!--- Need this in case it's a restart run (I notice that someone else also
+   !found need for tmpTimeInterval2... which I had to create for TVPDS 3.4.1)
+   curr_secs_nudging = real_time(tmpTimeInterval2)
 
    old_dt = grid%dt   ! store old time step for flux averaging code at end of RK loop
 
@@ -923,6 +956,83 @@ BENCH_START(rk_tend_tim)
      END DO
      !$OMP END PARALLEL DO
 BENCH_END(rk_tend_tim)
+
+  !------------------------------------------------------------------------------------------------------------------------------
+
+       ! Matt Onderlinde Sep, 2013, updated 2015 to allow restarts
+       ! If the pert_coriolis option is being used, overwrite grid%u_base,
+       ! grid%v_base, grid%t_base, grid%qv_base
+       ! with the nudging data.
+
+       ! Determine whether or not we're on a model timestep (as opposed to being
+       ! on a sound timestep)
+       curr_secs_val = curr_secs_nudging/real(config_flags%time_step)
+       curr_secs_int = int(curr_secs_val)
+       curr_secs_val_check = curr_secs_val*real(config_flags%time_step)
+       curr_secs_int_check = real(curr_secs_int)*real(config_flags%time_step)
+
+       ! If we're on a model timestep, and on the first rk_step, and fdda = 1
+       ! for this grid, and we're using pert_coriolis,
+       ! then update base profile with the nudging variables
+       IF (curr_secs_val_check.eq.curr_secs_int_check.and.rk_step.eq.1.and.nudge_indicator.eq.1.and.config_flags%pert_coriolis) THEN
+
+             ! Calculate what percentage of the current nudging interval has
+             ! passed
+             fraction_timestep = curr_secs_nudging / ( real(d01_gfdda_interval_m) * 60. )
+             nudge_interval = ceiling(fraction_timestep)
+             IF ( nudge_interval .eq. 0 ) THEN
+                  nudge_interval = 1
+             END IF
+             IF ( fraction_timestep .gt. 1. ) THEN
+                  fraction_timestep = fraction_timestep - real(int(fraction_timestep))
+             END IF
+
+             ! Update the base_profile with the nudging variables from i = 1, j
+             ! = 1, k = ks:ke
+             grid%u_base(1:(kde-1)) = grid%u_base(1:(kde-1)) + ((-1.0*config_flags%time_step*config_flags%guv) * &
+                                      (grid%u_base(1:(kde-1)) - (uold_base(:,nudge_interval) - ( (uold_base(:,nudge_interval) - unew_base(:,nudge_interval))*fraction_timestep))))
+             grid%v_base(1:(kde-1)) = grid%v_base(1:(kde-1)) + ((-1.0*config_flags%time_step*config_flags%guv) * &
+                                      (grid%v_base(1:(kde-1)) - (vold_base(:,nudge_interval) - ( (vold_base(:,nudge_interval) - vnew_base(:,nudge_interval))*fraction_timestep))))
+             grid%t_base(1:(kde-1)) = grid%t_base(1:(kde-1)) + ((-1.0*config_flags%time_step*config_flags%gt) * &
+                                      (grid%t_base(1:(kde-1)) - (told_base(:,nudge_interval) - ( (told_base(:,nudge_interval) - tnew_base(:,nudge_interval))*fraction_timestep))))
+             grid%qv_base(1:(kde-1)) = grid%qv_base(1:(kde-1)) + ((-1.0*config_flags%time_step*config_flags%gq) * &
+                                       (grid%qv_base(1:(kde-1)) - (qold_base(:,nudge_interval) - ( (qold_base(:,nudge_interval) - qnew_base(:,nudge_interval))*fraction_timestep))))
+
+            ! Update z_base (NOTE: this uses phi, which should be impacted by
+            ! updating the base profile above)
+             ! Note: I can't get this to work so we'll just leave z_base alone
+             ! for now
+             ! DO iiii = 1,(config_flags%e_vert-2)
+             !   grid%z_base(iiii) =
+             !   0.5*(grid%phb(1,iiii,1)+grid%phb(1,iiii+1,1)+grid%ph_1(1,iiii,1)+grid%ph_1(1,iiii+1,1))/9.81
+             ! END DO
+             ! print *, 'Printing grid%z_base in solve_em.F'
+             ! print *, grid%z_base
+
+             ! print *, ' '
+             ! print *, 'printing summary for solve_em.F addition : '
+             ! print *, ' '
+             ! print *, 'For domain ', config_flags%grid_id, ' nudge_indicator =
+             ! ', nudge_indicator
+             ! print *, 'nudge_interval = ', nudge_interval
+             ! print *, 'd01_gfdda_interval_m = ', d01_gfdda_interval_m
+             ! print *, 'fraction_timestep = ', fraction_timestep
+             ! print *, 'u_base = '
+             ! print *, grid%u_base
+             ! print *, ' '
+             ! print *, 'qv_base = '
+             ! print *, grid%qv_base
+             ! print *, ' '
+             ! print *, 'curr_secs         = ', curr_secs
+             ! print *, 'curr_secs_nudging = ', curr_secs_nudging
+             ! print *, ' '
+
+       END IF
+
+       ! End of modifying base profiles for pert_coriolis
+
+   !------------------------------------------------------------------------------------------------------------------------------
+
 
      IF (config_flags%use_adaptive_time_step) THEN
        DO ij = 1 , grid%num_tiles
