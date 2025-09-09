@@ -5,9 +5,19 @@ MODULE module_integrate
 
 CONTAINS
 
-RECURSIVE SUBROUTINE integrate ( grid )
-
-
+   ! Matt Onderlinde Sep, 2013
+   ! Add nudge base profile variables to subroutine integrate()
+RECURSIVE SUBROUTINE integrate ( grid,                 &
+                                 uold_base,            &
+                                 vold_base,            &
+                                 told_base,            &
+                                 qold_base,            &
+                                 unew_base,            &
+                                 vnew_base,            &
+                                 tnew_base,            &
+                                 qnew_base,            &
+                                 nudge_indicator,      &
+                                 d01_gfdda_interval_m  )
 
    USE module_domain
    USE module_driver_constants
@@ -173,12 +183,53 @@ RECURSIVE SUBROUTINE integrate ( grid )
    LOGICAL                                :: should_add_forcing
 #endif
 
+   ! Matt Onderlinde Sep, 2013
+   ! Introduce variables for u_base, v_base, t_base, qv_base based on the
+   ! nudging input
+   REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: uold_base
+   REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: vold_base
+   REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: told_base
+   REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: qold_base
+   REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: unew_base
+   REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: vnew_base
+   REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: tnew_base
+   REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: qnew_base
+   INTEGER, INTENT(IN) :: nudge_indicator, d01_gfdda_interval_m
+
    ! interface
    INTERFACE
        ! mediation-supplied solver
-     SUBROUTINE solve_interface ( grid )
+
+     ! Matt Onderlinde Sep, 2013
+     ! Add nudge base profile variables to solve_interface() call
+     SUBROUTINE solve_interface ( grid,                 &
+                                  uold_base,            &
+                                  vold_base,            &
+                                  told_base,            &
+                                  qold_base,            &
+                                  unew_base,            &
+                                  vnew_base,            &
+                                  tnew_base,            &
+                                  qnew_base,            &
+                                  nudge_indicator,      &
+                                  d01_gfdda_interval_m  )
+
        USE module_domain
        TYPE (domain) grid
+
+       ! Matt Onderlinde Sep, 2013
+       ! Introduce variables for u_base, v_base, t_base, qv_base based on the
+       ! nudging input
+       REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: uold_base
+       REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: vold_base
+       REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: told_base
+       REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: qold_base
+       REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: unew_base
+       REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: vnew_base
+       REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: tnew_base
+       REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: qnew_base
+       INTEGER, INTENT(IN) :: nudge_indicator, d01_gfdda_interval_m
+
      END SUBROUTINE solve_interface
        ! mediation-supplied routine to allow driver to pass time information
        ! down to mediation/model layer
@@ -390,7 +441,19 @@ IF ( grid_ptr%active_this_task ) THEN
                   CALL set_current_grid_ptr( grid_ptr )
                   CALL wrf_debug( 100 , 'module_integrate: calling solve interface ' )
 
-                  CALL solve_interface ( grid_ptr ) 
+               ! Matt Onderlinde Sep, 2013
+               ! Adding nudge-based variables to solve_interface call
+               CALL solve_interface ( grid_ptr,            &
+                                     uold_base,            &
+                                     vold_base,            &
+                                     told_base,            &
+                                     qold_base,            &
+                                     unew_base,            &
+                                     vnew_base,            &
+                                     tnew_base,            &
+                                     qnew_base,            &
+                                     nudge_indicator,      &
+                                     d01_gfdda_interval_m  )
 
 ENDIF
                CALL domain_clockadvance ( grid_ptr )
@@ -427,7 +490,21 @@ ENDIF
                    CALL set_current_grid_ptr( grid_ptr%nests(kid)%ptr )
                    WRITE(message,*)grid%id,' module_integrate: recursive call to integrate '
                    CALL wrf_debug( 100 , message )
-                      CALL integrate ( grid_ptr%nests(kid)%ptr ) 
+
+                   ! Matt Onderlinde Sep, 2013
+                   ! Add nudge base profile variables to integrate() call
+                   CALL integrate ( grid_ptr%nests(kid)%ptr,       &
+                                    uold_base,                     &
+                                    vold_base,                     &
+                                    told_base,                     &
+                                    qold_base,                     &
+                                    unew_base,                     &
+                                    vnew_base,                     &
+                                    tnew_base,                     &
+                                    qnew_base,                     &
+                                    nudge_indicator,               &
+                                    d01_gfdda_interval_m           )
+
                    WRITE(message,*)grid%id,' module_integrate: back from recursive call to integrate '
                    CALL wrf_debug( 100 , message )
                  ENDIF
