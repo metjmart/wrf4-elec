@@ -1,7 +1,19 @@
 !WRF:MEDIATION_LAYER:ADT_BARRIER
 !
 
-SUBROUTINE solve_interface ( grid ) 
+! Matt Onderlinde Sep, 2013
+! Add nudge base profile variables to solve_interface() subroutine
+SUBROUTINE solve_interface ( grid,                 &
+                             uold_base,            &
+                             vold_base,            &
+                             told_base,            &
+                             qold_base,            &
+                             unew_base,            &
+                             vnew_base,            &
+                             tnew_base,            &
+                             qnew_base,            &
+                             nudge_indicator,      &
+                             d01_gfdda_interval_m  )
 
    USE module_domain
    USE module_timing
@@ -26,6 +38,19 @@ SUBROUTINE solve_interface ( grid )
    INTEGER     :: idum1, idum2
    CHARACTER(len=256) :: dbg_msg
 
+   ! Matt Onderlinde Sep, 2013
+   ! Introduce variables for u_base, v_base, t_base, qv_base based on the
+   ! nudging input
+   REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: uold_base
+   REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: vold_base
+   REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: told_base
+   REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: qold_base
+   REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: unew_base
+   REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: vnew_base
+   REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: tnew_base
+   REAL, DIMENSION(:,:), ALLOCATABLE, INTENT(IN) :: qnew_base
+   INTEGER, INTENT(IN) :: nudge_indicator, d01_gfdda_interval_m
+
    CALL model_to_grid_config_rec ( grid%id , model_config_rec , config_flags )
    CALL set_scalar_indices_from_config ( grid%id , idum1 , idum2 )
 
@@ -46,7 +71,20 @@ SUBROUTINE solve_interface ( grid )
                )
    ELSE
 #endif
-      CALL solve_em  ( grid , config_flags  &
+
+   ! Matt Onderlinde Sep, 2013
+   ! Add nudge base profile variables to solve_em() call
+   CALL solve_em  ( grid , config_flags ,              &
+                    uold_base,                         &
+                    vold_base,                         &
+                    told_base,                         &
+                    qold_base,                         &
+                    unew_base,                         &
+                    vnew_base,                         &
+                    tnew_base,                         &
+                    qnew_base,                         &
+                    nudge_indicator,                   &
+                    d01_gfdda_interval_m               &
 !
 # include "actual_new_args.inc"
 !
