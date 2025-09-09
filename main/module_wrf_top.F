@@ -77,6 +77,20 @@ MODULE module_wrf_top
    INTEGER :: debug_level
    LOGICAL :: input_from_file
 
+   ! Matt Onderlinde Sep, 2013
+   ! Introduce variables for u_base, v_base, t_base, qv_base based on the
+   ! nudging input
+   REAL, DIMENSION(:,:), ALLOCATABLE :: uold_base
+   REAL, DIMENSION(:,:), ALLOCATABLE :: vold_base
+   REAL, DIMENSION(:,:), ALLOCATABLE :: told_base
+   REAL, DIMENSION(:,:), ALLOCATABLE :: qold_base
+   REAL, DIMENSION(:,:), ALLOCATABLE :: unew_base
+   REAL, DIMENSION(:,:), ALLOCATABLE :: vnew_base
+   REAL, DIMENSION(:,:), ALLOCATABLE :: tnew_base
+   REAL, DIMENSION(:,:), ALLOCATABLE :: qnew_base
+   INTEGER :: nudge_indicator
+   INTEGER :: d01_gfdda_interval_m
+
 #ifdef DM_PARALLEL
    INTEGER                 :: nbytes
    INTEGER, PARAMETER      :: configbuflen = 4* CONFIG_BUF_LEN
@@ -2033,6 +2047,13 @@ ENDIF
    !  The forecast integration for the most coarse grid is now started.  The
    !  integration is from the first step (1) to the last step of the simulation.
 
+   ! Matt Onderlinde Sep, 2013
+   ! Run the get_base_sounding_from_nudging subroutine to generate base nudging
+   ! variables
+   CALL get_base_sounding_from_nudging(uold_base, vold_base, told_base,qold_base,          &
+                                       unew_base, vnew_base, tnew_base,qnew_base,          &
+                                       config_flags, nudge_indicator,d01_gfdda_interval_m  )
+
    CALL       wrf_debug ( 100 , 'wrf: calling integrate' )
 #if (WRFPLUS == 1)
    model_config_rec%dyn_opt = dyn_em
@@ -2071,7 +2092,19 @@ ENDIF
    head_grid%itimestep = 0
    CALL start_domain ( head_grid , .TRUE. )
 #endif
-   CALL integrate ( head_grid )
+   ! Matt Onderlinde Sep, 2013
+   ! Add nudge base profile variables to integrate() call
+   CALL integrate ( head_grid,            &
+                    uold_base,            &
+                    vold_base,            &
+                    told_base,            &
+                    qold_base,            &
+                    unew_base,            &
+                    vnew_base,            &
+                    tnew_base,            &
+                    qnew_base,            &
+                    nudge_indicator,      &
+                    d01_gfdda_interval_m  )
 
 #if (WRFPLUS == 1)
    CALL nl_set_io_form_auxhist7( head_grid%id, io_auxh7 )
@@ -2322,5 +2355,181 @@ print *,'for parent domain id #',grid%id,', found child domain #',nestid_loc
          END DO
    
    END SUBROUTINE alloc_doms_for_dfi
+
+   !--------------------------------------------------------------------------------------------------------------
+
+   SUBROUTINE get_base_sounding_from_nudging(uold_base,vold_base,told_base,qold_base, &
+                                          unew_base,vnew_base,tnew_base,qnew_base, &
+                                          config_flags, nudge_indicator,d01_gfdda_interval_m  )
+
+      ! Matt Onderlinde Sep, 2013
+      ! This subroutine gets the nudging data and uses it to generate u_base, v_base, t_base, and qv_base.
+      ! This data will be passed to solve_em.F in order to allow grid%u_base, grid%v_base, grid%t_base,
+      ! and grid%qv_base to vary in time for nudging with the pert_coriolis option.
+
+      use netcdf
+
+      implicit none
+
+      TYPE (grid_config_rec_type) , INTENT(IN) :: config_flags
+
+      integer :: ncId, VarId,                                       &
+                          lonDimID, latDimId, timeDimId,            &
+                          numLons, numLats, numHeights, numTimes,   &
+                          status, iiii
+
+      integer, dimension(nf90_max_var_dims) :: dimIDs
+
+      integer, intent(out) :: nudge_indicator, d01_gfdda_interval_m
+
+      real, dimension(:,:), allocatable :: UOLD
+      real, dimension(:,:), allocatable :: VOLD
+      real, dimension(:,:), allocatable :: TOLD
+      real, dimension(:,:), allocatable :: QOLD
+      real, dimension(:,:), allocatable :: UNEW
+      real, dimension(:,:), allocatable :: VNEW
+      real, dimension(:,:), allocatable :: TNEW
+      real, dimension(:,:), allocatable :: QNEW
+
+      real, dimension(:,:), allocatable, intent(out) :: uold_base
+      real, dimension(:,:), allocatable, intent(out) :: vold_base
+      real, dimension(:,:), allocatable, intent(out) :: told_base
+      real, dimension(:,:), allocatable, intent(out) :: qold_base
+      real, dimension(:,:), allocatable, intent(out) :: unew_base
+      real, dimension(:,:), allocatable, intent(out) :: vnew_base
+      real, dimension(:,:), allocatable, intent(out) :: tnew_base
+      real, dimension(:,:), allocatable, intent(out) :: qnew_base
+
+      ! Set nudge_indicator to zero.  If nudging is turned on, then we'll set it
+      ! to
+      ! one so other subroutines know to update the base profile.
+      nudge_indicator = 0
+
+      ! If using pert_coriolis *AND* nudging, get the nudging variables to allow
+      ! a
+      !time-varying base profile.  Otherwise just fill these arrays with zeros.
+
+      IF ( config_flags%pert_coriolis .and. config_flags%grid_fdda .eq. 1 ) THEN
+
+        ! Set nudge_indicator equal to one
+        nudge_indicator = 1
+
+        ! Define the gfdda_interval_m for domain 1
+        d01_gfdda_interval_m = config_flags%gfdda_interval_m
+
+        ! Read in file
+        status = nf90_open("wrffdda_d01", nf90_NoWrite, ncid)
+
+        ! Figure out Nudging Variables dimensions
+        status = nf90_inq_varid(ncid, "U_NDG_OLD", VarId)
+        status = nf90_inquire_variable(ncid, VarId, dimids = dimIDs)
+        status = nf90_inquire_dimension(ncid, dimIDs(1), len = numLons)
+        status = nf90_inquire_dimension(ncid, dimIDs(2), len = numLats)
+        status = nf90_inquire_dimension(ncid, dimIDs(3), len = numHeights)
+        status = nf90_inquire_dimension(ncid, dimIDs(4), len = numTimes)
+
+        !Allocate variables
+        allocate(UOLD(numHeights, numTimes))
+        allocate(VOLD(numHeights, numTimes))
+        allocate(TOLD(numHeights, numTimes))
+        allocate(QOLD(numHeights, numTimes))
+        allocate(UNEW(numHeights, numTimes))
+        allocate(VNEW(numHeights, numTimes))
+        allocate(TNEW(numHeights, numTimes))
+        allocate(QNEW(numHeights, numTimes))
+        allocate(uold_base(numHeights,(numTimes-1)))
+        allocate(vold_base(numHeights,(numTimes-1)))
+        allocate(told_base(numHeights,(numTimes-1)))
+        allocate(qold_base(numHeights,(numTimes-1)))
+        allocate(unew_base(numHeights,(numTimes-1)))
+        allocate(vnew_base(numHeights,(numTimes-1)))
+        allocate(tnew_base(numHeights,(numTimes-1)))
+        allocate(qnew_base(numHeights,(numTimes-1)))
+
+        !Read in variables
+        status = nf90_get_var(ncid, VarId, UOLD, start = (/ 1, 1, 1, 1 /), count = (/ 1, 1, numHeights, numTimes /) )
+        status = nf90_inq_varid(ncid, "V_NDG_OLD", VarId)
+        status = nf90_get_var(ncid, VarId, VOLD, start = (/ 1, 1, 1, 1 /), count = (/ 1, 1, numHeights, numTimes /) )
+        status = nf90_inq_varid(ncid, "T_NDG_OLD", VarId)
+        status = nf90_get_var(ncid, VarId, TOLD, start = (/ 1, 1, 1, 1 /), count = (/ 1, 1, numHeights, numTimes /) )
+        status = nf90_inq_varid(ncid, "Q_NDG_OLD", VarId)
+        status = nf90_get_var(ncid, VarId, QOLD, start = (/ 1, 1, 1, 1 /), count = (/ 1, 1, numHeights, numTimes /) )
+        status = nf90_inq_varid(ncid, "U_NDG_NEW", VarId)
+        status = nf90_get_var(ncid, VarId, UNEW, start = (/ 1, 1, 1, 1 /), count = (/ 1, 1, numHeights, numTimes /) )
+        status = nf90_inq_varid(ncid, "V_NDG_NEW", VarId)
+        status = nf90_get_var(ncid, VarId, VNEW, start = (/ 1, 1, 1, 1 /), count = (/ 1, 1, numHeights, numTimes /) )
+        status = nf90_inq_varid(ncid, "T_NDG_NEW", VarId)
+        status = nf90_get_var(ncid, VarId, TNEW, start = (/ 1, 1, 1, 1 /), count = (/ 1, 1, numHeights, numTimes /) )
+        status = nf90_inq_varid(ncid, "Q_NDG_NEW", VarId)
+        status = nf90_get_var(ncid, VarId, QNEW, start = (/ 1, 1, 1, 1 /), count = (/ 1, 1, numHeights, numTimes /) )
+
+        !Print a summary of nudging variable dimensions
+        print *, 'Summary for Nudging Dimensions : '
+        print *, 'numLons = ', numLons
+        print *, 'numLats = ', numLats
+        print *, 'numHeights = ', numHeights
+        print *, 'numTimes = ', numTimes
+
+        !Define base profiles from nudging data
+        do iiii = 1, (numTimes-1)
+          uold_base(:,iiii) = UOLD(1:numHeights,iiii)
+          vold_base(:,iiii) = VOLD(1:numHeights,iiii)
+          told_base(:,iiii) = TOLD(1:numHeights,iiii)
+          qold_base(:,iiii) = QOLD(1:numHeights,iiii)
+          unew_base(:,iiii) = UNEW(1:numHeights,iiii)
+          vnew_base(:,iiii) = VNEW(1:numHeights,iiii)
+          tnew_base(:,iiii) = TNEW(1:numHeights,iiii)
+          qnew_base(:,iiii) = QNEW(1:numHeights,iiii)
+        enddo
+
+        !Print some data for UOLD to check that it's correct
+        print *, 'Printing profile for uold_base in module_wrf_top.F : '
+        do iiii = 1, (numTimes-1)
+          print *, uold_base(:,iiii)
+        enddo
+        print *, ' '
+
+      ELSE
+
+        print *, 'Filling base profile with zeros since they wont be used'
+
+        !Allocate variables
+        allocate(UOLD(1,1))
+        allocate(VOLD(1,1))
+        allocate(TOLD(1,1))
+        allocate(QOLD(1,1))
+        allocate(UNEW(1,1))
+        allocate(VNEW(1,1))
+        allocate(TNEW(1,1))
+        allocate(QNEW(1,1))
+        allocate(uold_base(1,1))
+        allocate(vold_base(1,1))
+        allocate(told_base(1,1))
+        allocate(qold_base(1,1))
+        allocate(unew_base(1,1))
+        allocate(vnew_base(1,1))
+        allocate(tnew_base(1,1))
+        allocate(qnew_base(1,1))
+
+        ! Fill with zeros
+        uold_base = 0.
+        vold_base = 0.
+        told_base = 0.
+        qold_base = 0.
+        unew_base = 0.
+        vnew_base = 0.
+        tnew_base = 0.
+        qnew_base = 0.
+
+        !Print some data for UOLD to check that it's correct
+        print *, 'Printing profile for UOLD in module_wrf_top.F : '
+        print *, uold_base
+        print *, ' '
+
+      END IF
+
+   END SUBROUTINE get_base_sounding_from_nudging
+
+   !------------------------------------------------------------------------------------------------------
 
 END MODULE module_wrf_top
