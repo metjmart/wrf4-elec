@@ -8,11 +8,10 @@ umask 022
 . /usr/share/modules/init/bash
 module purge
 unset LD_LIBRARY_PATH
-#module load comp/gcc/11.2.0
-module load comp/gcc/11.4.0
+module load comp/gcc/11.2.0
 module load comp/intel/2021.4.0
 module load mpi/impi/2021.4.0
-#module load python/GEOSpyD/Min4.11.0_py3.9
+module load python/GEOSpyD/Min4.11.0_py3.9
 
 export LD_LIBRARY_PATH=$LIBDIR_TAG/zlib/lib:$LD_LIBRARY_PATH
 export LD_LIBRARY_PATH=$LIBDIR_TAG/hdf5/lib:$LD_LIBRARY_PATH
@@ -33,4 +32,5 @@ export NETCDF4=1
 # export WRF_EM_CORE=1 # For serial compilation
 export WRF_ELEC=1
 export BOXMGLIBDIR=/discover/nobackup/projects/nu-wrf/lib/ekman/intel-intelmpi/boxmg
+
 
