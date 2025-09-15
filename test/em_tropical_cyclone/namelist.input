@@ -61,7 +61,10 @@
  /
 
  &physics
- mp_physics                          = 22, 22, 22,
+ mp_physics                          = 18, 18, 18,
+ nssl_hail_on                        = 0, 0, 0,
+ nssl_ccn_on                         = 1,
+ nssl_cccn                           = 0.2e+9,
  ra_lw_physics                       = 0, 0, 0,
  ra_sw_physics                       = 0, 0, 0,
  radt                                = 5, 5, 5,
@@ -109,6 +112,8 @@
  v_mom_adv_order                     = 3, 3, 3, 
  h_sca_adv_order                     = 5, 5, 5, 
  v_sca_adv_order                     = 3, 3, 3,
+ moist_adv_opt                       = 4, 4, 4,
+ scalar_adv_opt                      = 4, 4, 4,
  mix_full_fields                     = .true., .true., .true.,
  non_hydrostatic                     = .true., .true., .true., 
  /
