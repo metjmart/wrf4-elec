@@ -2,7 +2,7 @@
 
 ! Matt Onderlinde Sep, 2013
 ! Add nudge base profile variables to solve_em() subroutine
-SUBROUTINE solve_em ( grid, config_flags  &
+SUBROUTINE solve_em ( grid, config_flags,                &
                       uold_base,                         &
                       vold_base,                         &
                       told_base,                         &
